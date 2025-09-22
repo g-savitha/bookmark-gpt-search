@@ -140,9 +140,9 @@ async function showModelInformation() {
   modelSelectorDiv.className = 'message bot model-selector';
   modelSelectorDiv.innerHTML = `
     <div style="margin-bottom: 15px;">
-      🚀 <strong>${currentSelectedModel ? 'Model Information' : 'Available Ollama Models'}</strong>
+      🚀 <strong>${currentSelectedModel ? 'Model Information' : 'Recommended Ollama Models'}</strong>
       <div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">
-        ${currentSelectedModel ? `Information about ${currentSelectedModel}` : 'Browse available models and download options'}
+        ${currentSelectedModel ? `Information about ${currentSelectedModel}` : 'Browse Recommended models and download options'}
       </div>
     </div>
 
@@ -289,8 +289,8 @@ async function loadModelInformation(specificModel = null) {
           </div>
           <div class="model-actions">
             ${installedModels.some(installed => installed.name === specificModel || installed.name.startsWith(specificModel.split(':')[0]))
-              ? `<button class="model-btn installed-btn" disabled>✅ Already Installed</button>`
-              : `<div style="text-align: center;">
+          ? `<button class="model-btn installed-btn" disabled>✅ Already Installed</button>`
+          : `<div style="text-align: center;">
                   <div style="margin-bottom: 8px; font-size: 13px; color: #374151; font-weight: 500;">
                     📥 Download from Ollama:
                   </div>
@@ -301,7 +301,7 @@ async function loadModelInformation(specificModel = null) {
                     🌐 ollama.com/library/${specificModel.split(':')[0]}
                   </a>
                  </div>`
-            }
+        }
           </div>
         </div>
       `;
@@ -309,15 +309,14 @@ async function loadModelInformation(specificModel = null) {
     }
 
     // Add a helpful message when showing all models
-    if (!specificModel) {
-      const infoDiv = document.createElement('div');
-      infoDiv.style.cssText = 'margin-bottom: 16px; padding: 12px; background: rgba(255,107,53,0.1); border-radius: 8px; font-size: 13px; color: #374151;';
-      infoDiv.innerHTML = `
-        💡 <strong>Browse available models below</strong><br>
-        Select a model from the dropdown above to see specific information, or choose from the options below to download.
-      `;
-      container.appendChild(infoDiv);
-    }
+    // if (!specificModel) {
+    //   const infoDiv = document.createElement('div');
+    //   infoDiv.style.cssText = 'margin-bottom: 16px; padding: 12px; background: rgba(255,107,53,0.1); border-radius: 8px; font-size: 13px; color: #374151;';
+    //   infoDiv.innerHTML = `
+    //     💡 <strong>Browse Recommended models below</strong><br>
+    //   `;
+    //   container.appendChild(infoDiv);
+    // }
 
     modelsToShow.forEach(model => {
       const isInstalled = installedModels.some(installed =>
@@ -357,8 +356,8 @@ async function loadModelInformation(specificModel = null) {
 
         <div class="model-actions">
           ${isInstalled
-            ? `<button class="model-btn installed-btn" disabled>✅ Already Installed</button>`
-            : `<div style="text-align: center;">
+          ? `<button class="model-btn installed-btn" disabled>✅ Already Installed</button>`
+          : `<div style="text-align: center;">
                 <div style="margin-bottom: 8px; font-size: 13px; color: #374151; font-weight: 500;">
                   📥 Download from Ollama:
                 </div>
@@ -369,7 +368,7 @@ async function loadModelInformation(specificModel = null) {
                   🌐 ollama.com/library/${model.name.split(':')[0]}
                 </a>
                </div>`
-          }
+        }
         </div>
       `;
 
@@ -487,12 +486,12 @@ function updateOllamaStatusUI(connected, availableModels) {
     const modelsToShow = availableModels && availableModels.length > 0
       ? availableModels.map(m => m.name)
       : [
-          'llama3.2:3b',
-          'llama3.2:1b',
-          'phi3:mini',
-          'gemma2:2b',
-          'qwen2.5:3b'
-        ];
+        'llama3.2:3b',
+        'llama3.2:1b',
+        'phi3:mini',
+        'gemma2:2b',
+        'qwen2.5:3b'
+      ];
 
     modelsToShow.forEach(model => {
       const option = document.createElement('option');
@@ -1013,8 +1012,8 @@ function extractSnippet(bookmark, query) {
   }
 
   return bookmark.content.metaDescription ||
-         bookmark.content.paragraphs[0] ||
-         bookmark.content.fullText.substring(0, 100) + '...';
+    bookmark.content.paragraphs[0] ||
+    bookmark.content.fullText.substring(0, 100) + '...';
 }
 
 function escapeHtml(text) {

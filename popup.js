@@ -651,23 +651,32 @@ async function sendMessage() {
 }
 
 function prepareBookmarkContext(bookmarks, query) {
-  const relevantBookmarks = bookmarks
-    .filter(bookmark => {
-      const queryLower = query.toLowerCase();
-      const title = bookmark.title || '';
-      const metaDescription = bookmark.content?.metaDescription || '';
-      const fullText = bookmark.content?.fullText || '';
+  const queryWords = query.toLowerCase().split(/\s+/).filter(word => word.length > 2);
 
-      return (
-        title.toLowerCase().includes(queryLower) ||
-        metaDescription.toLowerCase().includes(queryLower) ||
-        fullText.toLowerCase().includes(queryLower)
-      );
+  const relevantBookmarks = bookmarks
+    .map(bookmark => {
+      const title = (bookmark.title || '').toLowerCase();
+      const metaDescription = (bookmark.content?.metaDescription || '').toLowerCase();
+      const fullText = (bookmark.content?.fullText || '').toLowerCase();
+      const headings = (bookmark.content?.headings || []).join(' ').toLowerCase();
+
+      let score = 0;
+
+      queryWords.forEach(word => {
+        if (title.includes(word)) score += 10;
+        if (metaDescription.includes(word)) score += 5;
+        if (headings.includes(word)) score += 3;
+        if (fullText.includes(word)) score += 1;
+      });
+
+      return { ...bookmark, relevanceScore: score };
     })
-    .slice(0, 10);
+    .filter(bookmark => bookmark.relevanceScore > 0)
+    .sort((a, b) => b.relevanceScore - a.relevanceScore)
+    .slice(0, 8);
 
   if (relevantBookmarks.length === 0) {
-    relevantBookmarks.push(...bookmarks.slice(0, 5));
+    relevantBookmarks.push(...bookmarks.slice(0, 3).map(b => ({ ...b, relevanceScore: 0 })));
   }
 
   return relevantBookmarks.map(bookmark => ({
@@ -692,12 +701,14 @@ ${context.map(bookmark => `
 ---`).join('\n')}
 
 Instructions:
-- Answer naturally and conversationally
+- Answer naturally and conversationally using proper markdown formatting
+- Use **bold** for emphasis and \`code\` for technical terms
 - Reference specific bookmarks by title when relevant
+- Only mention bookmarks that are actually relevant to the user's question
+- If asking about a specific topic (like "CSS"), only show bookmarks that contain that topic
 - Summarize, compare, or find patterns across bookmarks when asked
-- If you can't find relevant information, suggest related topics from their bookmarks
-- Be helpful and engaging in your responses
-- Keep responses concise but informative`;
+- Keep responses focused and concise
+- Format lists with bullet points or numbered lists when appropriate`;
 
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -711,58 +722,19 @@ Instructions:
     url: 'http://localhost:11434/api/chat'
   });
 
-  // Add visible debugging message
-  addMessage(`🔧 Debug: Sending request to Ollama with model "${selectedModel}"...`, 'bot');
 
-  const response = await fetch('http://localhost:11434/api/chat', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: selectedModel,
-      messages: messages,
-      stream: false,
-      options: {
-        temperature: 0.7,
-        top_p: 0.9,
-        max_tokens: 512
-      }
-    })
+  const result = await chrome.runtime.sendMessage({
+    action: 'ollamaChat',
+    model: selectedModel,
+    messages: messages
   });
 
-  console.log('Ollama response status:', response.status, response.statusText);
-
-  if (!response.ok) {
-    // Add visible debugging
-    addMessage(`🔧 Debug: Ollama returned status ${response.status} (${response.statusText})`, 'bot');
-
-    let errorMessage;
-    try {
-      const errorData = await response.json();
-      console.log('Ollama error data:', errorData);
-      addMessage(`🔧 Debug: Error details: ${JSON.stringify(errorData)}`, 'bot');
-      errorMessage = errorData.error || `Ollama API error: ${response.status}`;
-    } catch {
-      // Provide specific error messages based on status code
-      switch (response.status) {
-        case 403:
-          errorMessage = `Access denied (403). The model "${selectedModel}" might not be available or Ollama needs to be restarted.`;
-          break;
-        case 404:
-          errorMessage = `Model "${selectedModel}" not found (404). Try running: ollama pull ${selectedModel}`;
-          break;
-        case 500:
-          errorMessage = `Ollama server error (500). Please restart Ollama and try again.`;
-          break;
-        default:
-          errorMessage = `Ollama connection error: ${response.status}. Make sure Ollama is running.`;
-      }
-    }
-    throw new Error(errorMessage);
+  if (!result.success) {
+    addMessage(`🔧 Debug: Ollama error: ${result.error}`, 'bot');
+    throw new Error(result.error);
   }
 
-  const data = await response.json();
+  const data = result.data;
   return data.message.content;
 }
 
@@ -844,9 +816,27 @@ function addMessageToDOM(content, sender) {
   const chatContainer = document.getElementById('chatContainer');
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${sender}`;
-  messageDiv.textContent = content;
+
+  if (sender === 'bot') {
+    messageDiv.innerHTML = formatMarkdown(content);
+  } else {
+    messageDiv.textContent = content;
+  }
+
   chatContainer.appendChild(messageDiv);
   chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+
+function formatMarkdown(text) {
+  return text
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    .replace(/`(.*?)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+    .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+    .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+    .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+    .replace(/\n/g, '<br>');
 }
 
 function removeLastMessage() {
@@ -1056,39 +1046,73 @@ async function saveCurrentPage() {
   }
 }
 
+let isIndexing = false;
+let indexingCancelled = false;
+
 async function indexExistingBookmarks() {
   try {
     const indexBtn = document.getElementById('indexBookmarksBtn');
-    const originalText = indexBtn.textContent;
-    indexBtn.textContent = '⏳ Indexing...';
-    indexBtn.disabled = true;
+
+    if (isIndexing) {
+      // Stop indexing
+      indexingCancelled = true;
+      await chrome.runtime.sendMessage({ action: 'cancelIndexing' });
+      indexBtn.innerHTML = '<span class="btn-icon">⏹️</span><span>Stopping...</span>';
+      indexBtn.disabled = true;
+      addMessage('⏹️ Stopping indexing process...', 'bot');
+      return;
+    }
+
+    isIndexing = true;
+    indexingCancelled = false;
+    indexBtn.innerHTML = '<span class="btn-icon">⏹️</span><span>Stop Indexing</span>';
 
     addMessage('🔍 Starting to index your existing Chrome bookmarks. This may take a while...', 'bot');
 
     const response = await chrome.runtime.sendMessage({ action: 'indexExistingBookmarks' });
 
+    isIndexing = false;
+
+    if (indexingCancelled) {
+      indexBtn.innerHTML = '<span class="btn-icon">🔄</span><span>Index Bookmarks</span>';
+      indexBtn.disabled = false;
+      addMessage('⏹️ Indexing stopped by user.', 'bot');
+      return;
+    }
+
     if (response.success) {
-      indexBtn.textContent = '✅ Indexed!';
-      addMessage(`✅ Successfully indexed ${response.indexed} bookmarks! You can now chat about all your bookmarks.`, 'bot');
+      indexBtn.innerHTML = '<span class="btn-icon">✅</span><span>Indexed!</span>';
+      console.log('Indexing response:', response); // Debug log
+
+      if (response.total === 0) {
+        addMessage('📚 No bookmarks found! Please save some pages by clicking the "📚 Save Current Page" button above, then try indexing again.', 'bot');
+      } else if (response.indexed === 0) {
+        addMessage('✅ All your bookmarks are already indexed! You can now chat about all your bookmarks.', 'bot');
+      } else if (response.indexed === 1) {
+        addMessage('✅ Successfully indexed 1 new bookmark! You can now chat about all your bookmarks.', 'bot');
+      } else {
+        addMessage(`✅ Successfully indexed ${response.indexed} new bookmarks! You can now chat about all your bookmarks.`, 'bot');
+      }
       setTimeout(() => {
-        indexBtn.textContent = originalText;
+        indexBtn.innerHTML = '<span class="btn-icon">🔄</span><span>Index Bookmarks</span>';
         indexBtn.disabled = false;
       }, 3000);
     } else {
-      indexBtn.textContent = '❌ Error';
+      indexBtn.innerHTML = '<span class="btn-icon">❌</span><span>Error</span>';
       addMessage(`❌ Error indexing bookmarks: ${response.error}`, 'bot');
       setTimeout(() => {
-        indexBtn.textContent = originalText;
+        indexBtn.innerHTML = '<span class="btn-icon">🔄</span><span>Index Bookmarks</span>';
         indexBtn.disabled = false;
       }, 3000);
     }
   } catch (error) {
     console.error('Error indexing bookmarks:', error);
+    isIndexing = false;
     const indexBtn = document.getElementById('indexBookmarksBtn');
-    indexBtn.textContent = '❌ Error';
+    indexBtn.innerHTML = '<span class="btn-icon">❌</span><span>Error</span>';
     addMessage(`❌ Error indexing bookmarks: ${error.message}`, 'bot');
     setTimeout(() => {
-      indexBtn.textContent = '🔄 Index Existing Bookmarks';
+      indexBtn.innerHTML = '<span class="btn-icon">🔄</span><span>Index Bookmarks</span>';
       indexBtn.disabled = false;
     }, 3000);
   }

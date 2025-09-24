@@ -140,8 +140,45 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   } else if (request.action === 'indexExistingBookmarks') {
     indexExistingBookmarks().then(sendResponse);
     return true;
+  } else if (request.action === 'cancelIndexing') {
+    indexingCancelled = true;
+    sendResponse({ success: true });
+    return true;
+  } else if (request.action === 'ollamaChat') {
+    ollamaChat(request.model, request.messages).then(sendResponse);
+    return true;
   }
 });
+
+async function ollamaChat(model, messages) {
+  try {
+    const response = await fetch('http://localhost:11434/api/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: messages,
+        stream: false,
+        options: {
+          temperature: 0.7,
+          top_p: 0.9,
+          max_tokens: 512
+        }
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
 
 async function searchBookmarks(query) {
   try {
@@ -291,24 +328,53 @@ function flattenBookmarkTree(bookmarkNodes) {
   return bookmarks;
 }
 
+let indexingCancelled = false;
+
 async function indexExistingBookmarks() {
   try {
+    indexingCancelled = false;
     const chromeBookmarks = await chrome.bookmarks.getTree();
     const flatBookmarks = flattenBookmarkTree(chromeBookmarks);
 
+    // Check how many actually need indexing
+    const result = await chrome.storage.local.get(['bookmarkContents']);
+    const bookmarkContents = result.bookmarkContents || {};
+
+    const bookmarksToIndex = flatBookmarks.filter(bookmark => {
+      const urlKey = encodeURIComponent(bookmark.url);
+      return !bookmarkContents[urlKey];
+    });
+
+    if (flatBookmarks.length === 0) {
+      return { success: true, indexed: 0, total: 0 };
+    }
+
+    if (bookmarksToIndex.length === 0) {
+      return { success: true, indexed: 0, total: flatBookmarks.length };
+    }
+
     let indexed = 0;
-    for (const bookmark of flatBookmarks) {
+    for (const bookmark of bookmarksToIndex) {
+      if (indexingCancelled) {
+        return { success: true, indexed, cancelled: true, total: bookmarksToIndex.length };
+      }
+
       const urlKey = encodeURIComponent(bookmark.url);
 
-      // Check if we already have content for this bookmark
-      const result = await chrome.storage.local.get(['bookmarkContents']);
-      const bookmarkContents = result.bookmarkContents || {};
+      // Double-check it hasn't been indexed since we started
+      const currentResult = await chrome.storage.local.get(['bookmarkContents']);
+      const currentBookmarkContents = currentResult.bookmarkContents || {};
 
-      if (!bookmarkContents[urlKey]) {
+      if (!currentBookmarkContents[urlKey]) {
         // Try to fetch and index this bookmark
         try {
           const tab = await chrome.tabs.create({ url: bookmark.url, active: false });
           await new Promise(resolve => setTimeout(resolve, 3000)); // Wait for page load
+
+          if (indexingCancelled) {
+            await chrome.tabs.remove(tab.id);
+            return { success: true, indexed, cancelled: true, total: bookmarksToIndex.length };
+          }
 
           const contentResult = await chrome.scripting.executeScript({
             target: { tabId: tab.id },
@@ -336,7 +402,7 @@ async function indexExistingBookmarks() {
       }
     }
 
-    return { success: true, indexed };
+    return { success: true, indexed, total: flatBookmarks.length };
   } catch (error) {
     console.error('Error indexing existing bookmarks:', error);
     return { success: false, error: error.message };

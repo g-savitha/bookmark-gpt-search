@@ -28,6 +28,6 @@ Data is used solely to:
 - You can delete stored data through Chrome's extension settings
 
 ## Contact
-For privacy concerns, contact: [your-email@domain.com]
+For privacy concerns, contact: [gsavitha@protonmail.com]
 
-Last updated: [Current Date]
+Last updated: [25th September 2025]
